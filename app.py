@@ -17,10 +17,10 @@ HEADERS = {
 TIMEOUT = 30
 RETRIES = 2
 
-# 🔥 CLAVE: umbral de alpha
-# todo pixel con alpha <= ALPHA_CUTOFF se trata como transparente real
-ALPHA_CUTOFF = 20   # probá 10 / 20 / 35 si tus bordes son suaves
-PADDING = 0         # deja 1-3px de margen final
+# 🔥 CONFIG CLAVE
+ALPHA_CUTOFF = 20   # probá 10 / 20 / 35 si hay halos
+PADDING = 0
+OVERLAP = 6         # 🔥 ACERCA LOS MÓDULOS (4, 6 u 8 recomendado)
 
 
 def download_rgba(url: str) -> Image.Image:
@@ -38,11 +38,13 @@ def download_rgba(url: str) -> Image.Image:
     raise last
 
 
-def trim_alpha_threshold(img: Image.Image, cutoff: int = ALPHA_CUTOFF, padding: int = PADDING) -> Image.Image:
+def trim_alpha_threshold(
+    img: Image.Image,
+    cutoff: int = ALPHA_CUTOFF,
+    padding: int = PADDING
+) -> Image.Image:
     """
-    Recorta el canvas usando alpha con umbral:
-    - alpha <= cutoff => transparente
-    - alpha > cutoff  => contenido
+    Recorta el canvas usando alpha con umbral.
     """
     if img.mode != "RGBA":
         img = img.convert("RGBA")
@@ -50,10 +52,9 @@ def trim_alpha_threshold(img: Image.Image, cutoff: int = ALPHA_CUTOFF, padding: 
     alpha = img.split()[-1]
 
     # Binarizamos alpha con umbral
-    # 0 para transparente, 255 para contenido
     a = alpha.point(lambda p: 255 if p > cutoff else 0)
-
     bbox = a.getbbox()
+
     if not bbox:
         return img
 
@@ -90,26 +91,30 @@ def render():
         urls = data.get("urls")
 
         if not isinstance(urls, list) or len(urls) == 0:
-            return jsonify({"ok": False, "error": "Body inválido. Esperado: { urls: [...] }"}), 400
+            return jsonify({
+                "ok": False,
+                "error": "Body inválido. Esperado: { urls: [...] }"
+            }), 400
 
         imgs = []
         for u in urls:
             img = download_rgba(u)
-            img = trim_alpha_threshold(img)   # ✅ ACÁ está la diferencia real
+            img = trim_alpha_threshold(img)
             imgs.append(img)
 
         imgs = resize_to_min_height(imgs)
 
-        total_w = sum(im.width for im in imgs)
+        # 🔥 ANCHO TOTAL CON OVERLAP
+        total_w = sum(im.width for im in imgs) - OVERLAP * (len(imgs) - 1)
         h = imgs[0].height
 
-        # fondo transparente (si querés blanco, lo cambiamos)
         canvas = Image.new("RGBA", (total_w, h), (0, 0, 0, 0))
 
+        # 🔥 PEGADO CON OVERLAP
         x = 0
         for im in imgs:
             canvas.alpha_composite(im, (x, 0))
-            x += im.width
+            x += im.width - OVERLAP
 
         buf = io.BytesIO()
         canvas.save(buf, format="PNG", optimize=True)

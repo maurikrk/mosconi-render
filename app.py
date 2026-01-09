@@ -147,10 +147,6 @@ def render():
             canvas.alpha_composite(im, (x, 0))
             x += im.width - safe_overlap
 
-        # ✅ Firma: si no la ves, NO está deployado el código nuevo
-        draw = ImageDraw.Draw(canvas)
-        draw.text((10, 10), VERSION, fill=(255, 0, 0, 255))
-
         buf = io.BytesIO()
         canvas.save(buf, format="PNG", optimize=True)
         buf.seek(0)

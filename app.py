@@ -5,7 +5,7 @@ from typing import List
 
 import requests
 from flask import Flask, request, jsonify, send_file
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 app = Flask(__name__)
 
@@ -111,6 +111,39 @@ def crop_internal_sides(images: List[Image.Image], seam_crop: int) -> List[Image
 def health():
     return jsonify({"ok": True, "version": VERSION}), 200
 
+def add_bottom_shadow(img: Image.Image,
+                      shadow_height: int = 40,
+                      blur_radius: int = 25,
+                      opacity: int = 90) -> Image.Image:
+    """
+    Agrega una sombra suave debajo de la imagen.
+    """
+    w, h = img.size
+    new_h = h + shadow_height
+
+    # lienzo nuevo transparente
+    out = Image.new("RGBA", (w, new_h), (0, 0, 0, 0))
+
+    # capa de sombra
+    shadow = Image.new("RGBA", (w, shadow_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(shadow)
+
+    # elipse (más ancha que el mueble)
+    draw.ellipse(
+        (-w * 0.1, shadow_height * 0.2,
+         w * 1.1, shadow_height * 1.6),
+        fill=(0, 0, 0, opacity)
+    )
+
+    shadow = shadow.filter(ImageFilter.GaussianBlur(blur_radius))
+
+    # pegar sombra y luego el mueble
+    out.paste(shadow, (0, h - int(shadow_height * 0.3)), shadow)
+    out.paste(img, (0, 0), img)
+
+    return out
+
+
 
 @app.post("/render")
 def render():
@@ -146,7 +179,8 @@ def render():
         for im in imgs:
             canvas.alpha_composite(im, (x, 0))
             x += im.width - safe_overlap
-
+            
+        canvas = add_bottom_shadow(canvas)
         buf = io.BytesIO()
         canvas.save(buf, format="PNG", optimize=True)
         buf.seek(0)

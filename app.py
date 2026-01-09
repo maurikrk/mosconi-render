@@ -20,7 +20,7 @@ RETRIES = 2
 # 🔥 CONFIG CLAVE
 ALPHA_CUTOFF = 20   # probá 10 / 20 / 35 si hay halos
 PADDING = 0
-OVERLAP = 6         # 🔥 ACERCA LOS MÓDULOS (4, 6 u 8 recomendado)
+OVERLAP = 40         # 🔥 ACERCA LOS MÓDULOS (4, 6 u 8 recomendado)
 
 
 def download_rgba(url: str) -> Image.Image:

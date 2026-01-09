@@ -1,42 +1,62 @@
 from flask import Flask, request, send_file, jsonify
-import requests
 from PIL import Image
+import requests
 from io import BytesIO
-import os
 
 app = Flask(__name__)
 
-@app.get("/")
+@app.route("/", methods=["GET"])
 def health():
-    return "ok"
+    return "OK", 200
 
-@app.post("/render")
+
+@app.route("/render", methods=["POST"])
 def render():
-    data = request.get_json(force=True)
-    urls = data.get("urls", [])
+    data = request.get_json()
 
-    if not urls:
-        return jsonify({"error": "urls vacío"}), 400
+    if not data:
+        return jsonify({"error": "No JSON body received"}), 400
+
+    urls = data.get("urls")
+
+    if not urls or not isinstance(urls, list):
+        return jsonify({"error": "urls must be a list"}), 400
 
     images = []
-    for url in urls:
-        print("Bajando:", url, flush=True)
-        headers = {"User-Agent": "mosconi-render/1.0"}
-        r = requests.get(url, timeout=(5, 25), headers=headers)
-        r.raise_for_status()
-        images.append(Image.open(BytesIO(r.content)).convert("RGBA"))
 
-    total_width = sum(img.width for img in images)
-    max_height = max(img.height for img in images)
+    # 1️⃣ Descargar imágenes
+    for u in urls:
+        try:
+            print("Bajando:", u, flush=True)
+            r = requests.get(u, timeout=20)
+            r.raise_for_status()
+            img = Image.open(BytesIO(r.content)).convert("RGB")
+            images.append(img)
+        except Exception as e:
+            print("Error bajando imagen:", u, e, flush=True)
+            return jsonify({"error": f"Error downloading {u}"}), 500
 
-    canvas = Image.new("RGBA", (total_width, max_height), (0, 0, 0, 0))
+    if not images:
+        return jsonify({"error": "No images downloaded"}), 400
 
-    x = 0
+    # 2️⃣ Calcular tamaño final
+    widths = [img.width for img in images]
+    heights = [img.height for img in images]
+
+    total_width = sum(widths)
+    max_height = max(heights)
+
+    # 3️⃣ Crear canvas blanco
+    canvas = Image.new("RGB", (total_width, max_height), (255, 255, 255))
+
+    # 4️⃣ Pegar imágenes (izquierda → derecha, alineadas abajo)
+    x_offset = 0
     for img in images:
-        y = max_height - img.height
-        canvas.paste(img, (x, y), img)
-        x += img.width
+        y_offset = max_height - img.height  # bottom align
+        canvas.paste(img, (x_offset, y_offset))
+        x_offset += img.width
 
+    # 5️⃣ Devolver imagen final
     output = BytesIO()
     canvas.save(output, format="PNG")
     output.seek(0)
@@ -44,8 +64,10 @@ def render():
     return send_file(
         output,
         mimetype="image/png",
+        as_attachment=False,
         download_name="render.png"
     )
 
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    app.run(host="0.0.0.0", port=10000)

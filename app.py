@@ -20,6 +20,7 @@ def render():
 
     images = []
     for url in urls:
+        print("Bajando:", url, flush=True)
         headers = {"User-Agent": "mosconi-render/1.0"}
         r = requests.get(url, timeout=(5, 25), headers=headers)
         r.raise_for_status()

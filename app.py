@@ -22,7 +22,7 @@ PADDING = 0
 
 # 👇 Ajustes de “unión real”
 OVERLAP = 0            # dejalo en 0 si usás SEAM_CROP
-SEAM_CROP = 12         # 🔥 probá 12 / 18 / 24 (recorta cantos internos)
+SEAM_CROP = 24         # 🔥 probá 12 / 18 / 24 (recorta cantos internos)
 
 VERSION = f"vSEAM{SEAM_CROP}-OV{OVERLAP}-A{ALPHA_CUTOFF}"
 

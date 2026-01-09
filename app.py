@@ -20,7 +20,8 @@ def render():
 
     images = []
     for url in urls:
-        r = requests.get(url, timeout=30)
+        headers = {"User-Agent": "mosconi-render/1.0"}
+        r = requests.get(url, timeout=(5, 25), headers=headers)
         r.raise_for_status()
         images.append(Image.open(BytesIO(r.content)).convert("RGBA"))
 

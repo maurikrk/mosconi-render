@@ -20,7 +20,7 @@ RETRIES = 2
 # 🔥 CLAVE: umbral de alpha
 # todo pixel con alpha <= ALPHA_CUTOFF se trata como transparente real
 ALPHA_CUTOFF = 20   # probá 10 / 20 / 35 si tus bordes son suaves
-PADDING = 2         # deja 1-3px de margen final
+PADDING = 0         # deja 1-3px de margen final
 
 
 def download_rgba(url: str) -> Image.Image:

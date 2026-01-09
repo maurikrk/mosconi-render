@@ -22,7 +22,7 @@ PADDING = 0
 
 # 👇 Ajustes de “unión real”
 OVERLAP = 0            # dejalo en 0 si usás SEAM_CROP
-SEAM_CROP = 12         # 🔥 probá 12 / 18 / 24 (recorta cantos internos)
+SEAM_CROP = 12         # probá 12 / 18 / 24 (recorta cantos internos)
 
 VERSION = f"vSEAM{SEAM_CROP}-OV{OVERLAP}-A{ALPHA_CUTOFF}"
 
@@ -89,13 +89,10 @@ def crop_internal_sides(images: List[Image.Image], seam_crop: int) -> List[Image
         right = w
 
         if i == 0:
-            # primero: recorta derecha
             right = w - sc
         elif i == n - 1:
-            # último: recorta izquierda
             left = sc
         else:
-            # medio: recorta ambos lados
             left = sc
             right = w - sc
 
@@ -111,38 +108,74 @@ def crop_internal_sides(images: List[Image.Image], seam_crop: int) -> List[Image
 def health():
     return jsonify({"ok": True, "version": VERSION}), 200
 
+
+# ✅ SOMBRA MEJORADA (NO cambia el tamaño del canvas)
 def add_bottom_shadow(img: Image.Image,
-                      shadow_height: int = 40,
-                      blur_radius: int = 25,
-                      opacity: int = 90) -> Image.Image:
+                      shadow_height: int = 50,
+                      blur_radius: int = 28,
+                      opacity: int = 70,
+                      y_offset: int = -10) -> Image.Image:
     """
-    Agrega una sombra suave debajo de la imagen.
+    Sombra suave debajo del mueble, sin agrandar el canvas.
+    y_offset negativo la sube un poco (queda más realista).
     """
     w, h = img.size
-    new_h = h + shadow_height
 
-    # lienzo nuevo transparente
-    out = Image.new("RGBA", (w, new_h), (0, 0, 0, 0))
-
-    # capa de sombra
     shadow = Image.new("RGBA", (w, shadow_height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(shadow)
 
-    # elipse (más ancha que el mueble)
+    # elipse ancha y baja
     draw.ellipse(
-        (-w * 0.1, shadow_height * 0.2,
-         w * 1.1, shadow_height * 1.6),
+        (-w * 0.06, shadow_height * 0.10,
+         w * 1.06, shadow_height * 1.60),
         fill=(0, 0, 0, opacity)
     )
 
     shadow = shadow.filter(ImageFilter.GaussianBlur(blur_radius))
 
-    # pegar sombra y luego el mueble
-    out.paste(shadow, (0, h - int(shadow_height * 0.3)), shadow)
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     out.paste(img, (0, 0), img)
+
+    # pegamos sombra cerca de la base del mueble
+    out.paste(shadow, (0, h - shadow_height + y_offset), shadow)
 
     return out
 
+
+# ✅ BASE COMÚN (zócalo/piso) que sí agrega altura
+def add_base(img: Image.Image,
+             base_height: int = 28,
+             side_margin: int = 22,
+             color=(235, 235, 235, 255),
+             top_line_color=(215, 215, 215, 255),
+             top_line_thickness: int = 2,
+             radius: int = 10) -> Image.Image:
+    """
+    Agrega una base común debajo del render.
+    """
+    w, h = img.size
+    new_h = h + base_height
+
+    out = Image.new("RGBA", (w, new_h), (0, 0, 0, 0))
+    out.paste(img, (0, 0), img)
+
+    draw = ImageDraw.Draw(out)
+
+    x0 = side_margin
+    x1 = w - side_margin
+    y0 = h
+    y1 = h + base_height
+
+    if radius > 0:
+        draw.rounded_rectangle([x0, y0, x1, y1], radius=radius, fill=color)
+    else:
+        draw.rectangle([x0, y0, x1, y1], fill=color)
+
+    # línea superior (relieve)
+    for t in range(top_line_thickness):
+        draw.line([(x0, y0 + t), (x1, y0 + t)], fill=top_line_color)
+
+    return out
 
 
 @app.post("/render")
@@ -162,10 +195,10 @@ def render():
 
         imgs = resize_to_min_height(imgs)
 
-        # 🔥 Esto es lo que “pega” de verdad visualmente
+        # 🔥 Pegado real (cantos internos)
         imgs = crop_internal_sides(imgs, SEAM_CROP)
 
-        # (Opcional) overlap, normalmente 0 si usás SEAM_CROP
+        # Overlap opcional (normalmente 0 si usás SEAM_CROP)
         safe_overlap = 0
         if OVERLAP > 0 and len(imgs) > 1:
             safe_overlap = min(OVERLAP, min(im.width for im in imgs) - 1)
@@ -179,8 +212,13 @@ def render():
         for im in imgs:
             canvas.alpha_composite(im, (x, 0))
             x += im.width - safe_overlap
-            
-        canvas = add_bottom_shadow(canvas)
+
+        # ✅ 1) Sombra común (sin cambiar tamaño)
+        canvas = add_bottom_shadow(canvas, shadow_height=50, blur_radius=28, opacity=70, y_offset=-10)
+
+        # ✅ 2) Base común (agrega altura)
+        canvas = add_base(canvas, base_height=28, side_margin=22, radius=10)
+
         buf = io.BytesIO()
         canvas.save(buf, format="PNG", optimize=True)
         buf.seek(0)
@@ -196,3 +234,4 @@ def render():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
+

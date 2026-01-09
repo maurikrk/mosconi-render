@@ -1,126 +1,121 @@
 from flask import Flask, request, send_file, jsonify
 from PIL import Image
+import io
 import requests
-from io import BytesIO
-import math
 
 app = Flask(__name__)
+
+def trim_white(img: Image.Image, tol: int = 18) -> Image.Image:
+    """
+    Recorta márgenes blancos de una imagen.
+    tol: tolerancia (0 = recorta solo blanco puro; 10-25 suele andar bien)
+    """
+    # Trabajamos en RGBA para poder medir bien
+    im = img.convert("RGBA")
+    px = im.load()
+    w, h = im.size
+
+    def is_white(r, g, b, a):
+        # Si es transparente, lo consideramos "fondo" (recortable)
+        if a == 0:
+            return True
+        return (r >= 255 - tol) and (g >= 255 - tol) and (b >= 255 - tol)
+
+    # Buscamos bounding box de "no-blanco"
+    left = w
+    right = -1
+    top = h
+    bottom = -1
+
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = px[x, y]
+            if not is_white(r, g, b, a):
+                if x < left: left = x
+                if x > right: right = x
+                if y < top: top = y
+                if y > bottom: bottom = y
+
+    # Si está todo blanco (raro), devolvemos original
+    if right == -1:
+        return img.convert("RGBA")
+
+    # Expandimos 1px para no cortar sombra “agresivo”
+    pad = 1
+    left = max(0, left - pad)
+    top = max(0, top - pad)
+    right = min(w - 1, right + pad)
+    bottom = min(h - 1, bottom + pad)
+
+    return im.crop((left, top, right + 1, bottom + 1))
+
+
+def download_image(url: str, timeout: int = 30) -> Image.Image:
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return Image.open(io.BytesIO(r.content))
+
 
 @app.route("/", methods=["GET"])
 def health():
     return "OK", 200
 
 
-def _color_dist(c1, c2):
-    return math.sqrt(
-        (c1[0] - c2[0]) ** 2 +
-        (c1[1] - c2[1]) ** 2 +
-        (c1[2] - c2[2]) ** 2
-    )
-
-
-def trim_by_bg_color(img: Image.Image, tol: int = 35, pad: int = 0) -> Image.Image:
-    """
-    Recorta el borde detectando el color de fondo por las esquinas.
-    tol: tolerancia de color (más alto = recorta más “agresivo”)
-    pad: padding extra alrededor del recorte
-    """
-    im = img.convert("RGBA")
-    w, h = im.size
-    px = im.load()
-
-    # Tomar muestras de fondo en esquinas (evita pixel raro puntual)
-    corners = [
-        px[0, 0], px[w-1, 0], px[0, h-1], px[w-1, h-1]
-    ]
-    # Convertir a RGB
-    corners_rgb = [(c[0], c[1], c[2]) for c in corners]
-
-    # Elegir el “fondo” como el color más repetido / más cercano al promedio
-    avg = (
-        sum(c[0] for c in corners_rgb) // 4,
-        sum(c[1] for c in corners_rgb) // 4,
-        sum(c[2] for c in corners_rgb) // 4,
-    )
-
-    # bbox del contenido (pixeles que NO son fondo)
-    minx, miny = w, h
-    maxx, maxy = -1, -1
-
-    for y in range(h):
-        for x in range(w):
-            r, g, b, a = px[x, y]
-            if a == 0:
-                # Transparente => asumimos fondo
-                continue
-
-            d = _color_dist((r, g, b), avg)
-            if d > tol:
-                if x < minx: minx = x
-                if y < miny: miny = y
-                if x > maxx: maxx = x
-                if y > maxy: maxy = y
-
-    # Si no detecta nada, devolver igual
-    if maxx < minx or maxy < miny:
-        return img.convert("RGB")
-
-    # Aplicar padding
-    minx = max(minx - pad, 0)
-    miny = max(miny - pad, 0)
-    maxx = min(maxx + pad, w - 1)
-    maxy = min(maxy + pad, h - 1)
-
-    cropped = im.crop((minx, miny, maxx + 1, maxy + 1))
-    return cropped.convert("RGB")
-
-
 @app.route("/render", methods=["POST"])
 def render():
-    data = request.get_json(silent=True) or {}
-    urls = data.get("urls")
+    data = request.get_json(force=True, silent=True) or {}
 
-    if not urls or not isinstance(urls, list):
-        return jsonify({"error": "urls must be a list"}), 400
+    urls = data.get("urls", [])
+    if not isinstance(urls, list) or len(urls) == 0:
+        return jsonify({"error": "Falta 'urls' (array) en el body"}), 400
 
-    # Ajustables desde n8n
-    tol = int(data.get("tol", 35))   # probá 35, 45, 60
-    pad = int(data.get("pad", 0))    # si querés un margen mínimo, poné 2-5
+    # Parámetros opcionales
+    bg = data.get("bg", "white")          # "white" o "#ffffff"
+    gap = int(data.get("gap", 0))         # separación entre módulos (0 = pegados)
+    tol = int(data.get("tol", 18))        # tolerancia recorte blanco (12-25 recomendado)
+    target_h = data.get("height", None)   # si querés forzar altura
 
-    images = []
+    # 1) Descargar y recortar blancos
+    modules = []
     for u in urls:
-        try:
-            print("Bajando:", u, flush=True)
-            r = requests.get(u, timeout=30)
-            r.raise_for_status()
-            img = Image.open(BytesIO(r.content))
+        print("Bajando:", u, flush=True)
+        im = download_image(u)
+        im = trim_white(im, tol=tol)
+        modules.append(im)
 
-            # ✅ recorte robusto por “fondo de esquina”
-            img = trim_by_bg_color(img, tol=tol, pad=pad)
+    # 2) Normalizar alturas (opcional)
+    if target_h is not None:
+        target_h = int(target_h)
+    else:
+        # Usamos la altura máxima ya recortada
+        target_h = max(m.size[1] for m in modules)
 
-            images.append(img)
-        except Exception as e:
-            print("Error procesando:", u, e, flush=True)
-            return jsonify({"error": f"Error processing {u}", "detail": str(e)}), 500
+    resized = []
+    for m in modules:
+        w, h = m.size
+        if h == target_h:
+            resized.append(m)
+        else:
+            scale = target_h / float(h)
+            new_w = max(1, int(w * scale))
+            resized.append(m.resize((new_w, target_h), Image.LANCZOS))
 
-    # canvas final
-    total_width = sum(im.width for im in images)
-    max_height = max(im.height for im in images)
+    # 3) Crear canvas final (fondo blanco) y pegar alineando abajo
+    total_w = sum(m.size[0] for m in resized) + gap * (len(resized) - 1)
+    total_h = target_h
 
-    canvas = Image.new("RGB", (total_width, max_height), (255, 255, 255))
+    # Fondo blanco (RGB)
+    canvas = Image.new("RGB", (total_w, total_h), color=bg)
 
-    # pegar sin espacios, alineado abajo
     x = 0
-    for im in images:
-        y = max_height - im.height
-        canvas.paste(im, (x, y))
-        x += im.width
+    for m in resized:
+        mw, mh = m.size
+        y = total_h - mh  # bottom align
+        canvas.paste(m.convert("RGBA"), (x, y), m.convert("RGBA"))
+        x += mw + gap
 
-    out = BytesIO()
-    canvas.save(out, format="PNG")
+    # 4) Devolver PNG
+    out = io.BytesIO()
+    canvas.save(out, format="PNG", optimize=True)
     out.seek(0)
-    return send_file(out, mimetype="image/png", as_attachment=False, download_name="render.png")
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    return send_file(out, mimetype="image/png")
